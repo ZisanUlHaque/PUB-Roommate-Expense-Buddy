@@ -33,5 +33,4 @@ firebase.json
 database.rules.json
 
 #utils
-useLocalStorage.js
-rtdbPaths.js
+utils
