@@ -16,6 +16,7 @@ import { ToastProvider } from "./components/Toast";
 import AboutSection from "./components/AboutUs";
 import Footer from "./components/Footer";
 import MyProfile from "./pages/MyProfile";
+import Invites from "./pages/Invites";
 
 export default function App() {
   return (
@@ -86,7 +87,15 @@ export default function App() {
               path="/profile"
               element={
                 <ProtectedRoute>
-                 <MyProfile></MyProfile>
+                  <MyProfile></MyProfile>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/invites"
+              element={
+                <ProtectedRoute>
+                  <Invites />
                 </ProtectedRoute>
               }
             />

@@ -1,8 +1,7 @@
-// src/pages/GroupDetail.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { auth, db } from "../firebase/firebase.config";
-import { ref, onValue, update, get } from "firebase/database";
+import { ref, onValue, update, get, push, set } from "firebase/database";
 import {
   pathGroup,
   pathExpenses,
@@ -11,7 +10,9 @@ import {
   pathMembers,
   pathPublic,
   pathEmailUid,
-  
+  pathInvitesRoot,
+  pathInvitesTo,
+  pathInvitesFrom,
 } from "../utils/rtdbPaths";
 import { formatBDT, toMinor } from "../utils/money";
 import { emailKey } from "../utils/emailKey";
@@ -87,7 +88,9 @@ export default function GroupDetail() {
       const g = s.val() || {};
       setGroup({ id: groupId, ...g });
       const u = auth.currentUser;
-      const mem = Object.keys(g.members || {}).filter((x) => x !== (u?.uid || ""));
+      const mem = Object.keys(g.members || {}).filter(
+        (x) => x !== (u?.uid || "")
+      );
       setSettleTo((old) => old || mem[0] || "");
       setNewName(g.name || "");
     });
@@ -119,13 +122,15 @@ export default function GroupDetail() {
     const all = Array.from(new Set([...memUids, ...payerUids]));
     if (!all.length) return;
 
-    Promise.all(all.map((uid) => get(ref(db, pathPublic(uid))))).then((snaps) => {
-      const map = {};
-      snaps.forEach((snap, i) => {
-        map[all[i]] = snap.val() || {};
-      });
-      setUserMap(map);
-    });
+    Promise.all(all.map((uid) => get(ref(db, pathPublic(uid))))).then(
+      (snaps) => {
+        const map = {};
+        snaps.forEach((snap, i) => {
+          map[all[i]] = snap.val() || {};
+        });
+        setUserMap(map);
+      }
+    );
   }, [group, expenses]);
 
   // Hooks before any return
@@ -191,6 +196,7 @@ export default function GroupDetail() {
     }
   }
 
+  // Invite to join this existing group (sends an invite instead of adding immediately)
   async function inviteMember() {
     try {
       if (!canInvite) {
@@ -216,16 +222,50 @@ export default function GroupDetail() {
         showToast({ status: "error", title: "Already a member" });
         return;
       }
-      const updates = {};
-      updates[pathMembers(groupId) + `/${newUid}`] = true;
-      await update(ref(db), updates);
-      showToast({ status: "success", title: "Member added" });
+
+      // Enforce gender for the group if known
+      const inviteePub = await get(ref(db, pathPublic(newUid))).then(
+        (s) => s.val() || {}
+      );
+      const mePub = await get(ref(db, pathPublic(me))).then(
+        (s) => s.val() || {}
+      );
+
+      // Determine group gender: prefer group's gender, fallback to owner's/public gender
+      const groupGender = group.gender || mePub.gender || null;
+
+      if (groupGender && inviteePub.gender && inviteePub.gender !== groupGender) {
+        showToast({
+          status: "error",
+          title: "Gender mismatch",
+          desc: `This room is for ${groupGender} only.`,
+        });
+        return;
+      }
+
+      // Create joinGroup invite
+      const invRef = push(ref(db, pathInvitesRoot()));
+      await set(invRef, {
+        fromUid: me,
+        toUid: newUid,
+        type: "joinGroup",
+        groupId: groupId,
+        groupName: group.name || "Room",
+        gender: groupGender || null,
+        status: "pending",
+        createdAt: Date.now(),
+      });
+
+      await set(ref(db, pathInvitesTo(newUid) + `/${invRef.key}`), true);
+      await set(ref(db, pathInvitesFrom(me) + `/${invRef.key}`), true);
+
+      showToast({ status: "success", title: "Invite sent" });
       setInviteEmail("");
     } catch (e) {
       console.error(e);
       showToast({
         status: "error",
-        title: "Failed to add member",
+        title: "Failed to send invite",
         desc: e?.message || "Try again",
       });
     }
@@ -295,6 +335,11 @@ export default function GroupDetail() {
         <div>
           <div className="flex items-center gap-3">
             <h2 className="text-2xl font-bold">{group.name}</h2>
+            {group.gender && (
+              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                {group.gender} room
+              </span>
+            )}
             {isOwner && (
               <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-800">
                 Owner

@@ -3,14 +3,26 @@ import React, { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { auth, db } from "../firebase/firebase.config";
 import { ref, get, set, update, onValue, push } from "firebase/database";
-import { pathProfile, pathPrefs, pathPublic, pathGroups } from "../utils/rtdbPaths";
+import {
+  pathProfile,
+  pathPrefs,
+  pathPublic,
+  pathGroups,
+  pathInvitesRoot,
+  pathInvitesTo,
+  pathInvitesFrom,
+} from "../utils/rtdbPaths";
 import { scorePair } from "../utils/scoring";
 import { useToast } from "../components/Toast";
 
-// Local Avatar and color generator (no external utils required)
+// Local Avatar and color generator
 function Avatar({ name = "", size = 36 }) {
   const initials = name
-    ? name.split(/\s+/).map((p) => p[0]?.toUpperCase()).slice(0, 2).join("")
+    ? name
+        .split(/\s+/)
+        .map((p) => p[0]?.toUpperCase())
+        .slice(0, 2)
+        .join("")
     : "U";
   const color = colorFromString(name || "user");
   return (
@@ -38,7 +50,7 @@ export default function MyProfile() {
     department: "",
     studentId: "",
     gender: "",
-    languages: ""
+    languages: "",
   });
 
   // Preferences
@@ -52,7 +64,7 @@ export default function MyProfile() {
     drinker: false,
     guestsTolerance: 3,
     studyHabits: "mixed",
-    roommateGenderPreference: "any"
+    roommateGenderPreference: "any",
   });
 
   // Groups + names
@@ -67,8 +79,7 @@ export default function MyProfile() {
   const nav = useNavigate();
   const toast = useToast();
   const showToast =
-    toast?.show ||
-    (({ title, desc }) => console.log("[toast]", title || "", desc || ""));
+    toast?.show || (({ title, desc }) => console.log("[toast]", title || "", desc || ""));
 
   // Load my profile, prefs, groups, and public data
   useEffect(() => {
@@ -78,6 +89,9 @@ export default function MyProfile() {
       return;
     }
 
+    let unsubGroups = () => {};
+    let unsubPublic = () => {};
+
     (async () => {
       try {
         setLoading(true);
@@ -85,17 +99,19 @@ export default function MyProfile() {
         // Private profile and prefs
         const [pSnap, prefSnap] = await Promise.all([
           get(ref(db, pathProfile(u.uid))),
-          get(ref(db, pathPrefs(u.uid)))
+          get(ref(db, pathPrefs(u.uid))),
         ]);
         const p = pSnap.val() || {};
         const pr = prefSnap.val() || {};
+
+        const normalizedGender = (p.gender || "").toLowerCase();
 
         setProfile({
           displayName: p.displayName || u.displayName || "",
           department: p.department || "",
           studentId: p.studentId || "",
-          gender: p.gender || "",
-          languages: Array.isArray(p.languages) ? p.languages.join(", ") : ""
+          gender: normalizedGender,
+          languages: Array.isArray(p.languages) ? p.languages.join(", ") : "",
         });
 
         setPrefs({
@@ -108,11 +124,11 @@ export default function MyProfile() {
           drinker: !!pr.drinker,
           guestsTolerance: Number(pr.guestsTolerance ?? 3),
           studyHabits: pr.studyHabits || "mixed",
-          roommateGenderPreference: pr.roommateGenderPreference || "any"
+          roommateGenderPreference: pr.roommateGenderPreference || "any",
         });
 
         // Subscribe to my groups
-        const unsubGroups = onValue(ref(db, pathGroups()), (s) => {
+        unsubGroups = onValue(ref(db, pathGroups()), (s) => {
           const val = s.val() || {};
           const mine = Object.entries(val)
             .map(([id, g]) => ({ id, ...g }))
@@ -123,10 +139,11 @@ export default function MyProfile() {
           const allUids = new Set();
           mine.forEach((g) => Object.keys(g.members || {}).forEach((m) => allUids.add(m)));
           if (allUids.size) {
-            Promise.all([...allUids].map((id) => get(ref(db, `/public/${id}`)))).then((snaps) => {
+            const ids = [...allUids];
+            Promise.all(ids.map((id) => get(ref(db, pathPublic(id))))).then((snaps) => {
               const map = {};
               snaps.forEach((snap, idx) => {
-                const id = [...allUids][idx];
+                const id = ids[idx];
                 map[id] = snap.val() || {};
               });
               setUserNames(map);
@@ -142,7 +159,7 @@ export default function MyProfile() {
         if (!pub) {
           pub = {
             displayName: p.displayName || u.displayName || "",
-            gender: p.gender || "other",
+            gender: (p.gender || "other").toLowerCase(),
             languages: Array.isArray(p.languages) ? p.languages : [],
             budgetMin: Number(pr.budgetMin ?? 3000),
             budgetMax: Number(pr.budgetMax ?? 6000),
@@ -154,37 +171,54 @@ export default function MyProfile() {
             guestsTolerance: Number(pr.guestsTolerance ?? 3),
             studyHabits: pr.studyHabits || "mixed",
             roommateGenderPreference: pr.roommateGenderPreference || "any",
-            updatedAt: Date.now()
+            updatedAt: Date.now(),
           };
           await set(myPubRef, pub);
+        } else {
+          pub.gender = (pub.gender || "other").toLowerCase();
         }
         setMePublic(pub);
 
-        const unsubPublic = onValue(ref(db, "/public"), (snap) => {
+        unsubPublic = onValue(ref(db, "/public"), (snap) => {
           const val = snap.val() || {};
           const arr = Object.entries(val)
             .filter(([uid]) => uid !== u.uid)
             .map(([uid, d]) => ({ uid, ...(d || {}) }));
+          // Normalize gender
+          arr.forEach((o) => (o.gender = (o.gender || "other").toLowerCase()));
           setOthersPublic(arr);
         });
 
         setLoading(false);
-
-        return () => {
-          unsubGroups();
-          unsubPublic();
-        };
       } catch (e) {
         console.error(e);
         setLoading(false);
       }
     })();
-  }, [db]);
 
-  // Compute top suggestions
+    // Cleanup
+    return () => {
+      try {
+        unsubGroups && unsubGroups();
+        unsubPublic && unsubPublic();
+      } catch { /* empty */ }
+    };
+  }, [nav]);
+
+  // Compute top suggestions (same-gender enforced)
   useEffect(() => {
     if (!mePublic) return setScored([]);
-    const top = othersPublic
+    const myG = (mePublic.gender || "other").toLowerCase();
+
+    // Same gender only: male->male, female->female. Others see all.
+    const candidates =
+      myG === "male"
+        ? othersPublic.filter((o) => (o.gender || "other") === "male")
+        : myG === "female"
+        ? othersPublic.filter((o) => (o.gender || "other") === "female")
+        : othersPublic;
+
+    const top = candidates
       .map((o) => {
         const r = scorePair(mePublic, mePublic, o, o);
         if (!r) return null;
@@ -193,6 +227,7 @@ export default function MyProfile() {
       .filter(Boolean)
       .sort((a, b) => b.score - a.score)
       .slice(0, 6);
+
     setScored(top);
   }, [mePublic, othersPublic]);
 
@@ -200,23 +235,30 @@ export default function MyProfile() {
   const saveProfile = async () => {
     try {
       const u = auth.currentUser;
-      const langs = profile.languages.split(",").map((s) => s.trim()).filter(Boolean);
+      if (!u) return nav("/auth/sign-in");
+
+      const langs = profile.languages
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      const gender = (profile.gender || "").toLowerCase();
 
       await set(ref(db, pathProfile(u.uid)), {
         displayName: profile.displayName || "",
         department: profile.department || "",
         studentId: profile.studentId || "",
-        gender: profile.gender || "",
+        gender,
         languages: langs,
-        updatedAt: Date.now()
+        updatedAt: Date.now(),
       });
 
       // Keep public in sync with safe fields
       await update(ref(db, pathPublic(u.uid)), {
         displayName: profile.displayName || "",
-        gender: profile.gender || "other",
+        gender: gender || "other",
         languages: langs,
-        updatedAt: Date.now()
+        updatedAt: Date.now(),
       });
 
       // Also update /users for quick name/department lookup if needed
@@ -224,13 +266,29 @@ export default function MyProfile() {
         displayName: profile.displayName || "",
         department: profile.department || "",
         studentId: profile.studentId || "",
-        updatedAt: Date.now()
+        updatedAt: Date.now(),
       });
+
+      // Reflect changes locally
+      setMePublic((old) =>
+        old
+          ? {
+              ...old,
+              displayName: profile.displayName || "",
+              gender: gender || "other",
+              languages: langs,
+            }
+          : old
+      );
 
       showToast({ status: "success", title: "Profile saved" });
     } catch (e) {
       console.error(e);
-      showToast({ status: "error", title: "Failed to save profile", desc: e.message || "Try again" });
+      showToast({
+        status: "error",
+        title: "Failed to save profile",
+        desc: e.message || "Try again",
+      });
     }
   };
 
@@ -238,6 +296,8 @@ export default function MyProfile() {
   const savePrefs = async () => {
     try {
       const u = auth.currentUser;
+      if (!u) return nav("/auth/sign-in");
+
       const data = {
         ...prefs,
         budgetMin: Number(prefs.budgetMin || 0),
@@ -245,7 +305,7 @@ export default function MyProfile() {
         cleanliness: Number(prefs.cleanliness || 3),
         noiseTolerance: Number(prefs.noiseTolerance || 3),
         guestsTolerance: Number(prefs.guestsTolerance || 3),
-        updatedAt: Date.now()
+        updatedAt: Date.now(),
       };
       await set(ref(db, pathPrefs(u.uid)), data);
 
@@ -261,34 +321,82 @@ export default function MyProfile() {
         guestsTolerance: data.guestsTolerance,
         studyHabits: data.studyHabits,
         roommateGenderPreference: data.roommateGenderPreference,
-        updatedAt: Date.now()
+        updatedAt: Date.now(),
       });
 
       setMePublic((old) => (old ? { ...old, ...data } : old));
       showToast({ status: "success", title: "Preferences saved" });
     } catch (e) {
       console.error(e);
-      showToast({ status: "error", title: "Failed to save preferences", desc: e.message || "Try again" });
+      showToast({
+        status: "error",
+        title: "Failed to save preferences",
+        desc: e.message || "Try again",
+      });
     }
   };
 
-  // Create a group with suggested match
-  const createPairGroup = async (peerUid, displayName) => {
+  // Send invite for a new room with suggested match (room is created only after accept)
+  const inviteToNewRoom = async (peerUid, displayName) => {
     try {
       const u = auth.currentUser;
-      const gRef = push(ref(db, "/groups"));
-      await set(gRef, {
-        name: `Room with ${displayName || (peerUid ? peerUid.slice(0, 6) : "mate")}`,
-        createdBy: u.uid,
-        members: { [u.uid]: true, [peerUid]: true },
-        active: true,
-        createdAt: Date.now()
+      if (!u) return nav("/auth/sign-in");
+
+      const myG = (mePublic?.gender || "other").toLowerCase();
+      if (!myG || myG === "other") {
+        showToast({
+          status: "error",
+          title: "Set your gender",
+          desc: "Please set male/female in your profile first.",
+        });
+        return;
+      }
+
+      // Defensive: ensure peer is same gender
+      const peerSnap = await get(ref(db, pathPublic(peerUid)));
+      const peerGender = ((peerSnap.val()?.gender) || "other").toLowerCase();
+      if (peerGender && peerGender !== myG) {
+        showToast({
+          status: "error",
+          title: "Gender mismatch",
+          desc: `This app allows ${myG} → ${myG} rooms only.`,
+        });
+        return;
+      }
+
+      const label = myG === "male" ? "Boys Room" : "Girls Room";
+      const groupName = `${label} with ${displayName || peerUid.slice(0, 6)}`;
+
+      // Create invite (no room yet)
+      const invRef = push(ref(db, pathInvitesRoot()));
+      const inviteId = invRef.key;
+      const inviteData = {
+        fromUid: u.uid,
+        toUid: peerUid,
+        groupName,
+        gender: myG, // lock to inviter’s gender
+        type: "newRoom",
+        status: "pending",
+        createdAt: Date.now(),
+      };
+      const updates = {};
+      updates[`${pathInvitesRoot()}/${inviteId}`] = inviteData;
+      updates[`${pathInvitesTo(peerUid)}/${inviteId}`] = true;
+      updates[`${pathInvitesFrom(u.uid)}/${inviteId}`] = true;
+      await update(ref(db), updates);
+
+      showToast({
+        status: "success",
+        title: "Invite sent",
+        desc: "Room will be created once they accept.",
       });
-      showToast({ status: "success", title: "Group created", desc: "Opening..." });
-      nav(`/groups/${gRef.key}`);
     } catch (e) {
       console.error(e);
-      showToast({ status: "error", title: "Could not create group", desc: e.message || "Try again" });
+      showToast({
+        status: "error",
+        title: "Could not send invite",
+        desc: e.message || "Try again",
+      });
     }
   };
 
@@ -339,7 +447,9 @@ export default function MyProfile() {
               <select
                 className="w-full rounded border p-2"
                 value={profile.gender}
-                onChange={(e) => setProfile({ ...profile, gender: e.target.value })}
+                onChange={(e) =>
+                  setProfile({ ...profile, gender: (e.target.value || "").toLowerCase() })
+                }
               >
                 <option value="">Select</option>
                 <option value="male">male</option>
@@ -358,7 +468,10 @@ export default function MyProfile() {
             </div>
           </div>
           <div className="mt-3 flex justify-end">
-            <button onClick={saveProfile} className="rounded bg-sky-600 px-4 py-2 text-white hover:bg-sky-700">
+            <button
+              onClick={saveProfile}
+              className="rounded bg-sky-600 px-4 py-2 text-white hover:bg-sky-700"
+            >
               Save profile
             </button>
           </div>
@@ -478,7 +591,9 @@ export default function MyProfile() {
               <select
                 className="w-full rounded border p-2"
                 value={prefs.roommateGenderPreference}
-                onChange={(e) => setPrefs({ ...prefs, roommateGenderPreference: e.target.value })}
+                onChange={(e) =>
+                  setPrefs({ ...prefs, roommateGenderPreference: e.target.value })
+                }
               >
                 <option value="any">any</option>
                 <option value="male">male</option>
@@ -488,7 +603,10 @@ export default function MyProfile() {
           </div>
 
           <div className="mt-3 flex justify-end">
-            <button onClick={savePrefs} className="rounded bg-sky-600 px-4 py-2 text-white hover:bg-sky-700">
+            <button
+              onClick={savePrefs}
+              className="rounded bg-sky-600 px-4 py-2 text-white hover:bg-sky-700"
+            >
               Save preferences
             </button>
           </div>
@@ -507,9 +625,14 @@ export default function MyProfile() {
                 <li key={g.id} className="flex items-center justify-between rounded border p-3">
                   <div>
                     <div className="font-medium">{g.name}</div>
-                    <div className="text-xs text-gray-600">{Object.keys(g.members || {}).length} member(s)</div>
+                    <div className="text-xs text-gray-600">
+                      {Object.keys(g.members || {}).length} member(s)
+                    </div>
                   </div>
-                  <Link to={`/groups/${g.id}`} className="rounded bg-gray-200 px-3 py-1 text-sm hover:bg-gray-300">
+                  <Link
+                    to={`/groups/${g.id}`}
+                    className="rounded bg-gray-200 px-3 py-1 text-sm hover:bg-gray-300"
+                  >
                     Open
                   </Link>
                 </li>
@@ -549,14 +672,16 @@ export default function MyProfile() {
                     <Avatar name={m.displayName || m.uid} size={28} />
                     <div>
                       <div className="text-sm font-medium">{m.displayName || "Student"}</div>
-                      <div className="text-xs text-gray-500">Score: {(m.score * 100).toFixed(0)}%</div>
+                      <div className="text-xs text-gray-500">
+                        Score: {(m.score * 100).toFixed(0)}%
+                      </div>
                     </div>
                   </div>
                   <button
-                    onClick={() => createPairGroup(m.uid, m.displayName)}
+                    onClick={() => inviteToNewRoom(m.uid, m.displayName)}
                     className="rounded bg-sky-600 px-3 py-1 text-sm text-white hover:bg-sky-700"
                   >
-                    Invite to group
+                    Invite to room
                   </button>
                 </li>
               ))}

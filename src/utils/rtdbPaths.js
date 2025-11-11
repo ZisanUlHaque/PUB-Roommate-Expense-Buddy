@@ -28,3 +28,10 @@ export const pathBalance = (gid, uid) => `/balances/${gid}/${uid}`;
 
 // Community
 export const pathPosts = () => `/communityPosts`;
+
+// Invites (pending room creation until accept)
+export const pathInvitesRoot = () => `/invites`;                  // /invites/{inviteId}
+export const pathInvite = (inviteId) => `/invites/${inviteId}`;
+export const pathInvitesTo = (uid) => `/invitesByTo/${uid}`;      // /invitesByTo/{uid}/{inviteId}: true
+export const pathInvitesFrom = (uid) => `/invitesByFrom/${uid}`;  // /invitesByFrom/{uid}/{inviteId}: true
+export const pathInvitesByGroup = (gid) => `/invitesByGroup/${gid}`; // /invitesByGroup/{gid}/{inviteId}: true
